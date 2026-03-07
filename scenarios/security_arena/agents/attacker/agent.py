@@ -12,7 +12,9 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-
+import random
+import re
+import base64
 import uvicorn
 from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader
@@ -26,6 +28,14 @@ _template_dir = Path(__file__).parent / "templates"
 _env = Environment(loader=FileSystemLoader(_template_dir), trim_blocks=True, lstrip_blocks=True)
 _system_template = _env.get_template("system.j2")
 _user_template = _env.get_template("user.j2")
+_analyzer_system = _env.get_template("analyzer_system.j2")
+_analyzer_user = _env.get_template("analyzer_user.j2")
+_strategist_system = _env.get_template("strategist_system.j2")
+_strategist_user = _env.get_template("strategist_user.j2")
+_crafter_system = _env.get_template("crafter_system.j2")
+_crafter_user = _env.get_template("crafter_user.j2")
+_refiner_system = _env.get_template("refiner_system.j2")
+_refiner_user = _env.get_template("refiner_user.j2")
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore, TaskUpdater
@@ -92,6 +102,30 @@ class Attacker(AgentExecutor):
     def _render(self, template, ctx: ScenarioContext, **extra) -> str:
         """Render a Jinja2 template with the scenario context and extra data."""
         return template.render(**vars(ctx), **extra)
+    
+    def _apply_cpu_obfuscation(self, payload: str, attack_type: str) -> str:
+        """Use local CPU to mutate the payload, bypassing simple keyword filters."""
+        # 1. Zero-width space insertion (bypasses exact string matching)
+        # We insert a zero-width space (\u200b) randomly inside long words
+        words = payload.split()
+        obfuscated_words = []
+        for word in words:
+            if len(word) > 5 and random.random() > 0.5:
+                insert_idx = random.randint(1, len(word) - 1)
+                word = word[:insert_idx] + '\u200b' + word[insert_idx:]
+            obfuscated_words.append(word)
+        payload = " ".join(obfuscated_words)
+
+        # 2. Context Smuggling for INJECTIONS
+        if attack_type == "INJECTION":
+            smuggling_wrappers = [
+                f"",
+                f"```json\n{{\"data\": \"{payload}\"}}\n```",
+                f"| Info | Details |\n|---|---|\n| Note | {payload} |"
+            ]
+            payload = random.choice(smuggling_wrappers)
+
+        return payload
 
     async def _generate(self, system: str, user: str) -> str:
         """Generate a response from the LLM."""
@@ -103,7 +137,7 @@ class Attacker(AgentExecutor):
         return content if content is not None else ""
 
     async def execute(self, context: RequestContext, event_queue: EventQueue):
-        """Generate an attack based on scenario context."""
+        """Generate an attack using a 4-pass reasoning pipeline."""
         if not context.message:
             raise ServerError(error=InvalidParamsError(message="Missing message."))
 
@@ -112,32 +146,58 @@ class Attacker(AgentExecutor):
         updater = TaskUpdater(event_queue, task.id, task.context_id)
 
         try:
-            # Parse JSON context from orchestrator into dataclass
             message_text = context.get_user_input()
             ctx = ScenarioContext.from_dict(json.loads(message_text))
-            logger.info("Round %d: Type=%s, History=%d",
-                        ctx.current_round + 1, ctx.attack_type, len(ctx.battle_history))
+            stored_rounds = dict(self.round_data)
 
-            # Example: Retrieve previously stored data for this battle.
-            # This is separate from battle_history - use it to store custom data
-            # like strategy notes, patterns observed, or any analysis results.
-            # Keyed by round number. Agent restarts with each battle, so no need for context_id.
-            stored_rounds = dict(self.round_data)  # Copy for template
+            logger.info("Round %d Pipeline Initiated. History: %d", ctx.current_round + 1, len(ctx.battle_history))
 
-            # Render Jinja2 templates with context and stored data, then generate attack
-            output = await self._generate(
-                self._render(_system_template, ctx),
-                self._render(_user_template, ctx, stored_rounds=stored_rounds)
-            )
+            # ==========================================
+            # PASS 1: DEFENSE ANALYZER (API Call 1 of 4)
+            # ==========================================
+            analyzer_sys = self._render(_analyzer_system, ctx)
+            analyzer_usr = self._render(_analyzer_user, ctx, stored_rounds=stored_rounds)
+            analysis_result = await self._generate(analyzer_sys, analyzer_usr)
+            
+            # ==========================================
+            # PASS 2: STRATEGIST (API Call 2 of 4)
+            # ==========================================
+            strategist_sys = self._render(_strategist_system, ctx)
+            strategist_usr = self._render(_strategist_user, ctx, analysis=analysis_result)
+            strategy_result = await self._generate(strategist_sys, strategist_usr)
 
-            # Example: Store data for future rounds. Here we just store word_count,
-            # but participants can extend this to store anything useful.
+            # ==========================================
+            # PASS 3: PAYLOAD CRAFTER (API Call 3 of 4)
+            # ==========================================
+            logger.info("Pass 3: Crafting raw payload...")
+            crafter_sys = self._render(_crafter_system, ctx)
+            crafter_usr = self._render(_crafter_user, ctx, strategies=strategy_result)
+            raw_payload = await self._generate(crafter_sys, crafter_usr)
+
+            # ==========================================
+            # PASS 4: REFINER (API Call 4 of 4)
+            # ==========================================
+            logger.info("Pass 4: Refining and ensuring constraint compliance...")
+            refiner_sys = self._render(_refiner_system, ctx)
+            refiner_usr = self._render(_refiner_user, ctx, draft_payload=raw_payload)
+            final_llm_payload = await self._generate(refiner_sys, refiner_usr)
+
+            # ==========================================
+            # CPU OBFUSCATION (Using 10 CPUs limit)
+            # ==========================================
+            logger.info("Applying Python-based heuristic obfuscation...")
+            final_payload = self._apply_cpu_obfuscation(final_llm_payload, ctx.attack_type)
+
+            # Store rich data for the next round
             self.round_data[ctx.current_round] = {
-                "word_count": len(output.split())
+                "analysis": analysis_result,
+                "strategy_chosen": strategy_result,
+                "final_payload_preview": final_payload[:50] + "..."
             }
 
-            logger.info("Generated attack (%d chars)", len(output))
-            await updater.update_status(TaskState.completed, new_agent_text_message(output))
+            logger.info("Generated attack (%d chars)", len(final_payload))
+            await updater.update_status(TaskState.completed, new_agent_text_message(final_payload))
+            
         except Exception as e:
             logger.error("Attacker error: %s", e, exc_info=True)
             await updater.update_status(TaskState.failed, new_agent_text_message(f"Error: {e}"))
