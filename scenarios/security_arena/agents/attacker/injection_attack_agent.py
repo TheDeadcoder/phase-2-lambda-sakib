@@ -802,7 +802,7 @@ class InjectionAttackAgent:
             return
 
         last = ctx.battle_history[-1]
-        last_output = str(last.get("defender_output", ""))
+        last_output = str(last.get("defender_response", "") or last.get("defender_output", ""))
         analysis = analyze_injection_response(last_output, ctx)
 
         prev_rnd = rnd - 1
@@ -1041,7 +1041,7 @@ class InjectionAttackAgent:
             rd = self.round_data.get(rn, {})
             strategy = rd.get("strategy", "unknown")
             attacker_out = str(r.get("attacker_output", ""))[:300]
-            defender_out = str(r.get("defender_output", ""))[:400]
+            defender_out = str(r.get("defender_response", "") or r.get("defender_output", ""))[:400]
             analysis = rd.get("defender_analysis", {})
             status = analysis.get("status", "UNKNOWN")
 
