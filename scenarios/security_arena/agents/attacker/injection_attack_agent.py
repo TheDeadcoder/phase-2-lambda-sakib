@@ -176,7 +176,7 @@ INJECTION_STRATEGIES = [
 def analyze_injection_template(ctx: ScenarioContext) -> dict:
     """Analyze input_format_template to understand where and how to inject."""
     template = ctx.input_format_template
-    marker = "ATTACKER_OUTPUT"
+    marker = "PLACE_ATTACK_HERE"
     idx = template.find(marker)
 
     if idx == -1:
@@ -184,7 +184,7 @@ def analyze_injection_template(ctx: ScenarioContext) -> dict:
             "before_context": template[-500:] if template else "",
             "after_context": "",
             "injection_position": "unknown",
-            "template_conventions": "Could not locate ATTACKER_OUTPUT marker.",
+            "template_conventions": "Could not locate injection marker.",
             "has_conversation_format": False,
             "separators_found": [],
             "document_style": "unknown",
