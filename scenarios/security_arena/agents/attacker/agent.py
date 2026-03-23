@@ -37,9 +37,14 @@ from a2a.types import (
 from a2a.utils import new_agent_text_message, new_task
 from a2a.utils.errors import ServerError
 
-from .shared import ScenarioContext
-from .injection_attack_agent import InjectionAttackAgent
-from .direct_attack_agent import DirectAttackAgent
+try:
+    from .shared import ScenarioContext
+    from .injection_attack_agent import InjectionAttackAgent
+    from .direct_attack_agent import DirectAttackAgent
+except ImportError:
+    from shared import ScenarioContext
+    from injection_attack_agent import InjectionAttackAgent
+    from direct_attack_agent import DirectAttackAgent
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("attacker")

@@ -19,7 +19,10 @@ import re
 
 from openai import AsyncOpenAI
 
-from .shared import ScenarioContext
+try:
+    from .shared import ScenarioContext
+except ImportError:
+    from shared import ScenarioContext
 
 logger = logging.getLogger("attacker.direct")
 
