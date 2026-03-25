@@ -1193,7 +1193,7 @@ class DirectAttackAgent:
             defender_role=ctx.defender_role,
             domain_description=ctx.domain_description,
         )
-        raw = await self._llm(sys_prompt, usr_prompt, temperature=temperature, max_tokens=1200)
+        raw = await self._llm(sys_prompt, usr_prompt, temperature=temperature, max_tokens=2048)
         if raw:
             result = _clean_llm_output(raw)
             result = _sanitize_payload(result, ctx)
