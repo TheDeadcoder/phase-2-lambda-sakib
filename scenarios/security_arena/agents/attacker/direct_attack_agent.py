@@ -228,6 +228,24 @@ def _clean_llm_output(text: str) -> str:
     return text.strip()
 
 
+def _to_plaintext(text: str, max_len: int | None = None) -> str:
+    """Best-effort markdown/noise cleanup for prompt inputs and brief outputs."""
+    if not text:
+        return ""
+
+    cleaned = _normalize_text(text)
+    cleaned = re.sub(r"```[\s\S]*?```", " ", cleaned)
+    cleaned = re.sub(r"\[(.*?)\]\((.*?)\)", r"\1", cleaned)
+    cleaned = re.sub(r"^[\t ]*#{1,6}[\t ]*", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"^[\t ]*[-*•]+[\t ]*", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"[*_`#]", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+    if max_len is not None and len(cleaned) > max_len:
+        cleaned = cleaned[:max_len].rstrip()
+    return cleaned
+
+
 def _extract_payload(text: str) -> tuple[str, str]:
     """Extract payload from LLM output.  Returns (payload, analysis)."""
     text = _clean_llm_output(text)
@@ -504,6 +522,7 @@ class DirectAttackAgent:
                 ],
             )
             content = resp.choices[0].message.content
+            logger.info("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^LLM response: %s", content)
             return content if content is not None else ""
         except Exception as e:
             logger.warning("LLM call failed: %s", e)
@@ -1012,31 +1031,77 @@ class DirectAttackAgent:
     # ------------------------------------------------------------------
     # Round 0 helpers
     # ------------------------------------------------------------------
-    async def _round0_analyze(self, ctx: ScenarioContext) -> str:
-        """Call 1: Analyze context and produce ≤300-char focused brief."""
+    async def _round0_extract_domain(self, ctx: ScenarioContext) -> str:
+        """Call 1: Pure domain data extraction — no attack goal, minimal refusal risk."""
         sys_prompt = self._render("round0_analyze_system.j2")
         usr_prompt = self._render(
             "round0_analyze_user.j2",
-            attack_goal=ctx.attack_goal,
             defender_role=ctx.defender_role,
             defender_task=ctx.defender_task,
             output_format=ctx.output_format,
             domain_description=ctx.domain_description,
+        )
+        raw = await self._llm(sys_prompt, usr_prompt, temperature=0.2, max_tokens=1200)
+        if raw and not _is_refusal(raw):
+            if "SUMMARY:" in raw:
+                result = raw.split("SUMMARY:", 1)[1].strip()
+            else:
+                result = _to_plaintext(raw, max_len=400)
+            logger.info("~~~~~~~~~~~~~~~~~~~~~[R0-Call1-Extract] Domain summary (%d chars): %s", len(result), result)
+            return result
+        logger.warning("~~~~~~~~~~~~~~~~~~~~~[R0-Call1-Extract] Domain extraction failed or refused")
+        return ""
+
+    async def _round0_synthesize(self, ctx: ScenarioContext, domain_summary: str) -> str:
+        """Synthesize domain summary with objective and system details."""
+        sys_prompt = self._render("round0_synthesis_system.j2")
+        usr_prompt = self._render(
+            "round0_synthesis_user.j2",
+            domain_summary=domain_summary,
+            attack_goal=ctx.attack_goal,
+            defender_role=ctx.defender_role,
+            defender_task=ctx.defender_task,
+            output_format=ctx.output_format,
             attack_constraints=ctx.attack_constraints,
         )
-        logger.info("[R0-Call1-Analyze] SYS prompt:\n%s", sys_prompt)
-        logger.info("[R0-Call1-Analyze] USR prompt:\n%s", usr_prompt)
-        raw = await self._llm(sys_prompt, usr_prompt, temperature=0.3, max_tokens=120)
-        logger.info("[R0-Call1-Analyze] RAW output:\n%s", raw)
-        if raw:
-            return raw.strip()[:300]
-        # Fallback: rule-based extraction if LLM fails
-        logger.warning("[R0-Call1-Analyze] LLM returned empty, using basic_analysis fallback")
-        return self._basic_analysis(ctx)
+        for attempt in range(2):
+            raw = await self._llm(
+                sys_prompt, usr_prompt,
+                temperature=0.3,
+                max_tokens=1200,
+            )
+            if raw and not _is_refusal(raw):
+                if "BRIEF:" in raw:
+                    result = raw.split("BRIEF:", 1)[1].strip()
+                else:
+                    result = _to_plaintext(raw, max_len=500)
+                logger.info("~~~~~~~~~~~~~~~~~~~~~[R0-Synthesis] Result (%d chars): %s", len(result), result)
+                return result
+
+            logger.warning(f"[R0-Synthesis] Attempt {attempt+1} empty — retrying")
+
+        logger.warning("~~~~~~~~~~~~~~~~~~~~~[R0-Synthesis] Failed, falling back to programmatic merge")
+        return self._merge_analysis(domain_summary, ctx) if domain_summary else self._basic_analysis(ctx)
+
+    def _merge_analysis(self, domain_summary: str, ctx: ScenarioContext) -> str:
+        """Programmatic merge of domain summary with objective — no LLM call."""
+        goal_plain = _to_plaintext(ctx.attack_goal, max_len=150)
+        goal_plain = re.sub(
+            r"(?i)^\s*(your\s+goal|attack\s+objective|objective)\s*:\s*",
+            "", goal_plain,
+        ).strip()
+        role = _to_plaintext(ctx.defender_role, max_len=40) if ctx.defender_role else "system"
+        fmt = _to_plaintext(ctx.output_format, max_len=40) if ctx.output_format else ""
+        parts = [domain_summary.rstrip(". ")]
+        parts.append(f"Obj: {goal_plain}")
+        parts.append(f"Sys: {role}")
+        if fmt:
+            parts.append(f"Fmt: {fmt}")
+        return ". ".join(parts)[:450]
 
     def _basic_analysis(self, ctx: ScenarioContext) -> str:
         """Rule-based analysis fallback when LLM call 1 fails."""
-        domain = ctx.domain_description or ""
+        domain = _to_plaintext(ctx.domain_description or "", max_len=2400)
         # Extract person names
         names = re.findall(r"\b[A-Z][a-z]+\s+[A-Z][a-z]+\b", domain)
         entity = names[0] if names else "first record"
@@ -1046,10 +1111,15 @@ class DirectAttackAgent:
         # Extract dates
         dates = re.findall(r"\d{4}-\d{2}-\d{2}", domain)
         date_str = f", DOB:{dates[0]}" if dates else ""
-        role = ctx.defender_role[:30] if ctx.defender_role else "system"
-        # Build compact brief without sensitive type labels
-        goal_words = ctx.attack_goal.split()[:6]
-        goal_compact = " ".join(goal_words)
+        role = _to_plaintext(ctx.defender_role, max_len=30) if ctx.defender_role else "system"
+        goal_plain = _to_plaintext(ctx.attack_goal, max_len=220)
+        goal_plain = re.sub(
+            r"(?i)^\s*(your\s+goal|attack\s+objective|objective)\s*:\s*",
+            "",
+            goal_plain,
+        ).strip()
+        goal_words = goal_plain.split()[:8]
+        goal_compact = " ".join(goal_words) if goal_words else "complete record disclosure"
         return f"Focus:{entity}{date_str}{id_str}. Obj:{goal_compact}. Sys:{role}. Get complete records with all fields."[:300]
 
     async def _round0_strategize(
@@ -1121,21 +1191,17 @@ class DirectAttackAgent:
         return "", raw.strip()
 
     async def _round0_puzzle_fallback(
-        self, ctx: ScenarioContext, analysis: str
+        self, ctx: ScenarioContext, analysis: str, temperature: float = 0.8
     ) -> str:
-        """Call 4: Generate puzzle-based fallback, stored for later rounds."""
+        """Generate puzzle-based fallback, stored for later rounds."""
         sys_prompt = self._render("round0_fallback_system.j2")
         usr_prompt = self._render(
             "round0_fallback_user.j2",
-            attack_goal=ctx.attack_goal,
             analysis=analysis,
             defender_role=ctx.defender_role,
             domain_description=ctx.domain_description,
         )
-        logger.info("[R0-Call4-PuzzleFB] SYS prompt:\n%s", sys_prompt)
-        logger.info("[R0-Call4-PuzzleFB] USR prompt:\n%s", usr_prompt)
-        raw = await self._llm(sys_prompt, usr_prompt, temperature=0.8, max_tokens=800)
-        logger.info("[R0-Call4-PuzzleFB] RAW output:\n%s", raw)
+        raw = await self._llm(sys_prompt, usr_prompt, temperature=temperature, max_tokens=1200)
         if raw:
             result = _clean_llm_output(raw)
             result = _sanitize_payload(result, ctx)
@@ -1170,66 +1236,60 @@ class DirectAttackAgent:
         return text
 
     # ------------------------------------------------------------------
-    # Round 0: analyze → strategize → payload → puzzle fallback
+    # Round 0: analyze → synthesize → puzzle fallbacks
     # ------------------------------------------------------------------
     async def _execute_round_zero(
         self, ctx: ScenarioContext, intelligence: str
     ) -> str:
-        # --- Call 1: Analyze context and narrow focus (≤300 chars) ---
-        analysis = await self._round0_analyze(ctx)
-        self.round_data[0] = {"analysis": analysis}
-        logger.info("Round 0 analysis (%d chars): %s", len(analysis), analysis)
+        # === Phase 1: Analysis (2 LLM calls, guaranteed result) ===
 
-        # --- Call 2: Generate attack prompts from strategy ---
-        gen_sys, gen_usr = await self._round0_strategize(ctx, analysis)
-        self.round_data[0]["generated_sys_prompt"] = gen_sys[:500]
-        self.round_data[0]["generated_usr_prompt"] = gen_usr[:500]
+        # Call 1: Pure domain extraction (no attack goal → minimal refusal risk)
+        domain_summary = await self._round0_extract_domain(ctx)
+        logger.info("[R0] Domain summary (%d chars): %s", len(domain_summary), domain_summary)
 
-        # --- Call 3: Generate payload using the crafted prompts ---
-        payload = ""
-        if gen_sys and gen_usr:
-            logger.info("[R0-Call3-Payload] SYS prompt (from strategize):\n%s", gen_sys)
-            logger.info("[R0-Call3-Payload] USR prompt (from strategize):\n%s", gen_usr)
-            raw = await self._llm(gen_sys, gen_usr, temperature=0.9, max_tokens=1536)
-            logger.info("[R0-Call3-Payload] RAW output:\n%s", raw)
-            if raw:
-                payload = self._clean_payload_output(raw)
-                payload = _sanitize_payload(payload, ctx)
-                logger.info("[R0-Call3-Payload] Cleaned payload (%d chars):\n%s", len(payload), payload)
+        # Call 2: Synthesize domain + objective + system patterns
+        base = domain_summary if domain_summary else self._basic_analysis(ctx)
+        analysis = await self._round0_synthesize(ctx, base)
+
+        # If synthesis failed, programmatic merge (free, no LLM call)
+        if not analysis:
+            if domain_summary:
+                analysis = self._merge_analysis(domain_summary, ctx)
+                logger.info("[R0] Synthesis failed, used programmatic merge")
             else:
-                logger.warning("[R0-Call3-Payload] LLM returned empty")
-        else:
-            logger.warning("[R0-Call3-Payload] SKIPPED — strategize produced no prompts (gen_sys=%d, gen_usr=%d)", len(gen_sys), len(gen_usr))
+                analysis = self._basic_analysis(ctx)
+                logger.info("[R0] Both calls failed, used basic_analysis fallback")
 
-        # --- Call 4: Generate puzzle fallback (stored for this + later rounds) ---
-        puzzle_fb = await self._round0_puzzle_fallback(ctx, analysis)
-        self.round_data[0]["puzzle_fallback"] = puzzle_fb
-        if puzzle_fb:
-            logger.info("Round 0 puzzle fallback: %d chars", len(puzzle_fb))
+        self.round_data[0] = {
+            "analysis": analysis,
+            "domain_summary": domain_summary or "",
+        }
+        logger.info("[R0] Final analysis (%d chars): %s", len(analysis), analysis)
 
-        # --- Select best result ---
-        logger.info("[R0-Select] payload=%d chars, weak=%s | puzzle_fb=%d chars, weak=%s",
-                     len(payload), _is_weak_payload(payload, ctx) if payload else 'empty',
-                     len(puzzle_fb), _is_weak_payload(puzzle_fb, ctx) if puzzle_fb else 'empty')
+        # === Phase 2: Puzzle fallback generation (remaining budget) ===
+        fallbacks = []
+        fb_temps = [0.8, 1.0, 0.9]
+        fb_idx = 0
+        while self._call_count < self._max_calls_per_round:
+            temp = fb_temps[fb_idx % len(fb_temps)]
+            fb = await self._round0_puzzle_fallback(ctx, analysis, temperature=temp)
+            if fb and not _is_weak_payload(fb, ctx):
+                fallbacks.append(fb)
+            fb_idx += 1
 
-        if payload and not _is_weak_payload(payload, ctx):
-            self.round_data[0]["strategy_description"] = "round0_strategized"
-            self.round_data[0]["output_length"] = len(payload)
-            logger.info("[R0-Select] CHOSEN: strategized payload (%d chars)", len(payload))
-            return payload
+        self.round_data[0]["fallbacks"] = fallbacks
+        logger.info("[R0] Generated %d puzzle fallbacks", len(fallbacks))
 
-        if puzzle_fb and not _is_weak_payload(puzzle_fb, ctx):
+        # === Select best fallback as round 0 payload ===
+        if fallbacks:
+            payload = max(fallbacks, key=len)
             self.round_data[0]["strategy_description"] = "round0_puzzle_fallback"
-            self.round_data[0]["output_length"] = len(puzzle_fb)
-            logger.info("[R0-Select] CHOSEN: puzzle fallback (%d chars)", len(puzzle_fb))
-            return puzzle_fb
+        else:
+            payload = self._build_fallback(ctx)
+            self.round_data[0]["strategy_description"] = "round0_hardcoded_fallback"
 
-        # Ultimate fallback — hardcoded templates
-        fb = self._build_fallback(ctx)
-        self.round_data[0]["strategy_description"] = "round0_hardcoded_fallback"
-        self.round_data[0]["output_length"] = len(fb)
-        logger.info("[R0-Select] CHOSEN: hardcoded fallback (%d chars):\n%s", len(fb), fb)
-        return fb
+        self.round_data[0]["output_length"] = len(payload)
+        return payload
 
     # ------------------------------------------------------------------
     # Rounds 1+: summarizer + 1 refinement + 1 fresh + judge
