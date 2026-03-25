@@ -1043,11 +1043,7 @@ class DirectAttackAgent:
         )
         raw = await self._llm(sys_prompt, usr_prompt, temperature=0.2, max_tokens=1200)
         if raw and not _is_refusal(raw):
-            if "SUMMARY:" in raw:
-                result = raw.split("SUMMARY:", 1)[1].strip()
-            else:
-                result = _to_plaintext(raw, max_len=400)
-            logger.info("~~~~~~~~~~~~~~~~~~~~~[R0-Call1-Extract] Domain summary (%d chars): %s", len(result), result)
+            result = raw.strip()
             return result
         logger.warning("~~~~~~~~~~~~~~~~~~~~~[R0-Call1-Extract] Domain extraction failed or refused")
         return ""
@@ -1067,15 +1063,11 @@ class DirectAttackAgent:
         for attempt in range(2):
             raw = await self._llm(
                 sys_prompt, usr_prompt,
-                temperature=0.3,
+                temperature=0.2,
                 max_tokens=1200,
             )
             if raw and not _is_refusal(raw):
-                if "BRIEF:" in raw:
-                    result = raw.split("BRIEF:", 1)[1].strip()
-                else:
-                    result = _to_plaintext(raw, max_len=500)
-                logger.info("~~~~~~~~~~~~~~~~~~~~~[R0-Synthesis] Result (%d chars): %s", len(result), result)
+                result = raw.strip()
                 return result
 
             logger.warning(f"[R0-Synthesis] Attempt {attempt+1} empty — retrying")
