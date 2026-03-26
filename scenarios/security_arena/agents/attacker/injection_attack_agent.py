@@ -19,7 +19,6 @@ Key principle: Payloads are DOCUMENTS, not REQUESTS.
              (if analyzer refuses, FREE reflection used; budget unchanged)
 """
 
-import asyncio
 import json
 import logging
 import os
@@ -1045,17 +1044,21 @@ class InjectionAttackAgent:
 
         base_temp = 0.55 if rnd == 0 else (0.65 if rnd <= 3 else 0.8)
 
-        tasks = []
         strats = strategies[:n_gen]
 
+        # Sequential generation — one call at a time to avoid rate limits
+        results = []
         for i, strategy in enumerate(strats):
             temp = min(base_temp + (i * 0.15), 1.1)
             sys_prompt, usr_prompt = self._build_injection_prompts(
                 ctx, strategy, reflection, template_analysis,
             )
-            tasks.append(self._generate(sys_prompt, usr_prompt, temperature=temp))
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                raw = await self._generate(sys_prompt, usr_prompt, temperature=temp)
+            except Exception as e:
+                logger.warning("Generator %d failed: %s", i, e)
+                raw = e
+            results.append(raw)
 
         candidates = []
         for i, raw in enumerate(results):
