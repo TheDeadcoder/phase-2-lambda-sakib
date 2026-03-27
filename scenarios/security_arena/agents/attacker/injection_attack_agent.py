@@ -427,12 +427,15 @@ class InjectionAttackAgent:
             )
             out = resp.choices[0].message.content or ""
             logger.info("LLM response: %d chars", len(out))
+            logger.info(">>>CALL_OUTPUT_START call=%d<<<\n%s\n>>>CALL_OUTPUT_END<<<", self._calls, out if out else "(empty)")
             return out
         except asyncio.TimeoutError:
             logger.warning("LLM call %d timed out", self._calls)
+            logger.info(">>>CALL_OUTPUT_START call=%d<<<\n(empty - timeout)\n>>>CALL_OUTPUT_END<<<", self._calls)
             return ""
         except Exception as e:
             logger.warning("LLM call %d error: %s", self._calls, e)
+            logger.info(">>>CALL_OUTPUT_START call=%d<<<\n(empty - error: %s)\n>>>CALL_OUTPUT_END<<<", self._calls, e)
             return ""
 
     @property
@@ -449,6 +452,10 @@ class InjectionAttackAgent:
 
         self._update_history(ctx)
         tpl = _analyze_template(ctx)
+        logger.info(
+            ">>>ROUND_START round=%d total=%d<<<",
+            rnd + 1, ctx.max_number_of_rounds,
+        )
         logger.info(
             "Rd %d: fmt=%s pos=%s sep='%s'",
             rnd + 1, tpl["format_type"], tpl["position"],
