@@ -884,7 +884,7 @@ class DirectAttackAgent:
         system: str,
         user: str,
         temperature: float = 0.9,
-        max_tokens: int = 1536,
+        max_tokens: int = 1200,
     ) -> str:
         if self._call_count >= self._max_calls_per_round:
             logger.warning(
@@ -1191,7 +1191,7 @@ class DirectAttackAgent:
             defender_role=ctx.defender_role,
             domain_description=ctx.domain_description,
         )
-        raw = await self._llm(sys_prompt, usr_prompt, temperature=temperature, max_tokens=2048)
+        raw = await self._llm(sys_prompt, usr_prompt, temperature=temperature, max_tokens=1300)
         if raw:
             result = _clean_llm_output(raw)
             result = _sanitize_payload(result, ctx)
@@ -1430,7 +1430,7 @@ class DirectAttackAgent:
             defender_status=status,
         )
 
-        raw = await self._llm(sys_prompt, usr_prompt, temperature=0.2, max_tokens=512)
+        raw = await self._llm(sys_prompt, usr_prompt, temperature=0.2, max_tokens=1000)
 
         if raw and not _is_refusal(raw):
             signal = raw.strip().replace("\n", " ")[:300]
@@ -1468,7 +1468,7 @@ class DirectAttackAgent:
             r0_analysis=r0_analysis,
         )
 
-        raw = await self._llm(sys_prompt, usr_prompt, temperature=0.7, max_tokens=1536)
+        raw = await self._llm(sys_prompt, usr_prompt, temperature=0.7, max_tokens=1200)
 
         if raw and not _is_refusal(raw):
             logger.info("[RoundN-Strategy] Raw (%d chars): %s", len(raw), raw[:500])
@@ -1566,7 +1566,7 @@ class DirectAttackAgent:
         )
 
         temp = 0.8 + min(ctx.current_round * 0.03, 0.15)
-        raw = await self._llm(sys_prompt, usr_prompt, temperature=temp, max_tokens=2048)
+        raw = await self._llm(sys_prompt, usr_prompt, temperature=temp, max_tokens=1200)
 
         if raw:
             payload, _ = _extract_payload(raw)
@@ -1605,7 +1605,7 @@ class DirectAttackAgent:
         )
 
         temp = 0.85
-        raw = await self._llm(sys_prompt, usr_prompt, temperature=temp, max_tokens=2048)
+        raw = await self._llm(sys_prompt, usr_prompt, temperature=temp, max_tokens=1200)
 
         if raw:
             enhanced, _ = _extract_payload(raw)

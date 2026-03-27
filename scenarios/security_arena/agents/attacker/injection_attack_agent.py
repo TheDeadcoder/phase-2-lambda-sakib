@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Injection Attack Agent v3 — Generic, adaptive, budget-efficient.
+Injection Attack Agent v4 — Generic, adaptive, refusal-resistant.
 
-Fixes from v2 (informed by PortfolioIQ + ResumeDowngrade LLM call logs):
-  - max_tok=1024 everywhere (vLLM returns empty at lower values)
-  - Compact plan format ("UNDER 15 WORDS per value") → no more truncation
-  - Gen calls output raw content (no JSON wrapper) → no extraction failure
-  - Higher gen temps (0.85-0.95) → diverse payloads
-  - Rounds 1+: analyze+plan combined in 1 call → 3 gen attempts instead of 1
+Key improvements over v3:
+  - Anti-refusal framing: QA test-fixture authoring context on all calls
+  - Goal reframing: adversarial goals rephrased as benign test objectives
+  - Budget optimization: saved calls generate benign dilution / enhancement
+  - Multi-technique strategies: round-indexed structural technique selection
+  - Domain-adaptive augmentation: labels/structure derived from template vocab
   - Robust truncated-JSON extraction → salvages partial plans
   - Refusal guard in execute() → refusals never reach output
   - Position-aware separator handling → works for prepend/inline/append
