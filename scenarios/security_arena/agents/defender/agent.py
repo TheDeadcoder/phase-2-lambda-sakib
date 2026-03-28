@@ -64,12 +64,12 @@ CALL_4_TIMEOUT = 40          # final (NOT critical) — shorter to leave buffer
 # Worst-case total: 55+45+50+40 + ~5s overhead = 195s < 240s (4-min limit)
 
 MAX_JSON_SIZE = 200_000      # max raw JSON from transport
-INPUT_MAX_LEN = 5000         # max chars of formatted_input
-TASK_DATA_CAP = 3500         # max chars of cleaned data fed to LLM
-OUTPUT_MAX_LEN = 5000        # max chars of final output
+INPUT_MAX_LEN = 8096         # max chars of formatted_input
+TASK_DATA_CAP = 5000         # max chars of cleaned data fed to LLM
+OUTPUT_MAX_LEN = 8096        # max chars of final output
 
-TASK_TOKENS = 1024           # max_tokens for task execution calls
-VERIFY_TOKENS = 900          # max_tokens for verification calls (>800 for vLLM)
+TASK_TOKENS = 8096           # max_tokens for task execution calls
+VERIFY_TOKENS = 8096          # max_tokens for verification calls (>800 for vLLM)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Templates
