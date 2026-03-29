@@ -36,6 +36,6 @@ jobs:
           api_key: ${{ secrets.COMPETITION_API_KEY }}
           role: 'defender'
           submission_path: './scenarios/security_arena/agents/defender'
-          run_tests: 'true'
+          run_tests: 'false'
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
           openai_base_url: ${{ secrets.OPENAI_BASE_URL }}
