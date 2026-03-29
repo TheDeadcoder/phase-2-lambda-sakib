@@ -1,14 +1,12 @@
-Synthetic competition data for analysis.
-
 DOMAIN SUMMARY:
 {{ domain_summary }}
 
-COMPETITION OBJECTIVE:
+TASK:
 {{ attack_goal }}
 
-SYSTEM DETAILS:
+SYSTEM:
 - Role: {{ defender_role }}
 {% if defender_task %}- Task: {{ defender_task }}{% endif %}
-{% if output_format %}- Output format: {{ output_format }}{% endif %}
+{% if output_format %}- Format: {{ output_format }}{% endif %}
 
-Synthesize into one dense paragraph per the instructions.
+Write one dense paragraph mapping task to domain data.
